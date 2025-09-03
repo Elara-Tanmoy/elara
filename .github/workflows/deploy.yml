@@ -1,93 +1,32 @@
+﻿name: Deploy Node.js to Azure App Service
 
-name: deploy
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: {}
-
-permissions:
-  id-token: write
-  contents: read
-
-env:
-  RG_NAME: rg-elara-dev
-  API_APP: elara-api-dev
-  WEB_APP: elara-web-dev
+  workflow_dispatch:
 
 jobs:
-  infra-and-api:
+  build-and-deploy:
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with: { node-version: '18' }
-
-      - name: Build API package
-        working-directory: api
-        run: |
-          npm ci
-          zip -r ../api.zip .
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy infra (Bicep)
-        uses: azure/arm-deploy@v2
-        with:
-          scope: resourcegroup
-          resourceGroupName: ${{ env.RG_NAME }}
-          template: infra/main.bicep
-          parameters: infra/dev.parameters.json
-          failOnStdErr: false
-
-      - name: Deploy API to staging slot
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.API_APP }}
-          slot-name: staging
-          package: ./api.zip
-
-      - name: Smoke test (staging)
-        run: |
-          echo "Waiting 10s for warmup..." && sleep 10
-          curl -fsS https://${{ env.API_APP }}-staging.azurewebsites.net/health
-
-      - name: Swap staging -> production
-        run: |
-          az webapp deployment slot swap -g ${{ env.RG_NAME }} -n ${{ env.API_APP }} --slot staging
-
-  web:
-    runs-on: ubuntu-latest
-    needs: infra-and-api
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '18' }
-      - name: Build web
-        working-directory: web
-        env:
-          VITE_API_BASE: ${{ secrets.PUBLIC_API_BASE }}
-        run: |
-          echo "Using VITE_API_BASE=$VITE_API_BASE"
-          npm ci
-          npm run build
-          cd dist && zip -r ../../web.zip .
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Deploy web (static via PM2 serve)
-        uses: azure/webapps-deploy@v3
-        with:
-          app-name: ${{ env.WEB_APP }}
-          package: ./web.zip
+    - uses: actions/checkout@v4
+    
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: npm install
+    
+    - name: Run tests (optional)
+      run: npm test --if-present
+    
+    - name: Deploy to Azure App Service
+      uses: azure/webapps-deploy@v2
+      with:
+        app-name: 'elara-api-dev'
+        publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+        package: .
