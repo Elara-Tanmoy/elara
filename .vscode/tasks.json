@@ -1,0 +1,119 @@
+{
+  "version": "2.0.0",
+  "inputs": [
+    {
+      "id": "subscriptionId",
+      "type": "promptString",
+      "description": "Azure Subscription ID"
+    },
+    {
+      "id": "prefix",
+      "type": "promptString",
+      "description": "Name prefix (e.g., elara)",
+      "default": "elara"
+    },
+    {
+      "id": "location",
+      "type": "promptString",
+      "description": "Azure location (canadacentral/canadaeast)",
+      "default": "canadacentral"
+    },
+    {
+      "id": "kvName",
+      "type": "promptString",
+      "description": "Key Vault name (e.g., kv-elara-dev)",
+      "default": "kv-elara-dev"
+    },
+    {
+      "id": "llmKey",
+      "type": "promptString",
+      "description": "Your Azure OpenAI API key (paste)",
+      "password": true
+    },
+    {
+      "id": "aoaiEndpoint",
+      "type": "promptString",
+      "description": "Azure OpenAI endpoint (https://<resource>.openai.azure.com)"
+    },
+    {
+      "id": "aoaiDeployment",
+      "type": "promptString",
+      "description": "Azure OpenAI deployment name (model)",
+      "default": "gpt-4o-mini"
+    }
+  ],
+  "tasks": [
+    {
+      "label": "A0: Azure Login",
+      "type": "shell",
+      "command": "az login",
+      "problemMatcher": []
+    },
+    {
+      "label": "A1: Set Subscription",
+      "type": "shell",
+      "command": "az account set --subscription ${input:subscriptionId}",
+      "problemMatcher": []
+    },
+    {
+      "label": "A2: Create Resource Group",
+      "type": "shell",
+      "command": "az group create -g rg-${input:prefix}-dev -l ${input:location}",
+      "problemMatcher": []
+    },
+    {
+      "label": "A3: Deploy Infra (Bicep)",
+      "type": "shell",
+      "command": "az deployment group create -g rg-${input:prefix}-dev -f infra/main.bicep -p infra/dev.parameters.json",
+      "problemMatcher": []
+    },
+    {
+      "label": "A4: Set Key Vault Secret (LLM)",
+      "type": "shell",
+      "command": "az keyvault secret set --vault-name ${input:kvName} --name AZURE_OPENAI_API_KEY --value ${input:llmKey}",
+      "problemMatcher": []
+    },
+    {
+      "label": "A5: Wire API App Settings (LLM)",
+      "type": "shell",
+      "command": "SECRET_ID=$(az keyvault secret show --vault-name ${input:kvName} --name AZURE_OPENAI_API_KEY --query id -o tsv) && az webapp config appsettings set -g rg-${input:prefix}-dev -n ${input:prefix}-api-dev --settings \"LLM_PROVIDER=azure_openai\" \"AZURE_OPENAI_ENDPOINT=${input:aoaiEndpoint}\" \"AZURE_OPENAI_DEPLOYMENT=${input:aoaiDeployment}\" \"AZURE_OPENAI_API_VERSION=2024-02-15-preview\" \"AZURE_OPENAI_API_KEY=@Microsoft.KeyVault(SecretUri=$SECRET_ID)\"",
+      "problemMatcher": []
+    },
+    {
+      "label": "B0: Build API (zip)",
+      "type": "shell",
+      "command": "cd api && npm ci && zip -r ../api.zip .",
+      "problemMatcher": []
+    },
+    {
+      "label": "B1: Deploy API to Staging Slot",
+      "type": "shell",
+      "command": "az webapp deployment source config-zip -g rg-${input:prefix}-dev -n ${input:prefix}-api-dev -s staging --src api.zip",
+      "problemMatcher": []
+    },
+    {
+      "label": "B2: Swap Slot \u2192 Production",
+      "type": "shell",
+      "command": "az webapp deployment slot swap -g rg-${input:prefix}-dev -n ${input:prefix}-api-dev --slot staging",
+      "problemMatcher": []
+    },
+    {
+      "label": "C0: Build Web (Vite)",
+      "type": "shell",
+      "command": "cd web && npm ci && VITE_API_BASE=https://${input:prefix}-api-dev.azurewebsites.net npm run build && cd dist && zip -r ../../web.zip .",
+      "problemMatcher": []
+    },
+    {
+      "label": "C1: Deploy Web (static on App Service)",
+      "type": "shell",
+      "command": "az webapp deployment source config-zip -g rg-${input:prefix}-dev -n ${input:prefix}-web-dev --src web.zip",
+      "problemMatcher": []
+    },
+    {
+      "label": "D0: Create Entra App for GitHub OIDC",
+      "type": "shell",
+      "command": "APP_NAME=${input:prefix}-github-oidc; APP_ID=$(az ad app create --display-name $APP_NAME --query appId -o tsv); echo \"APP_ID=$APP_ID\"",
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+
+{
+  "manifest_version": 3,
+  "name": "Elara Link Guard",
+  "version": "0.1.0",
+  "description": "Blocks or warns on risky links using Elara API.",
+  "permissions": ["storage", "webNavigation"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "service_worker.js" },
+  "options_page": "options.html",
+  "action": { "default_title": "Elara" }
+}

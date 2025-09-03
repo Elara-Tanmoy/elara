@@ -1,0 +1,16 @@
+
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Elara Desktop</title></head>
+<body style="font-family: system-ui, sans-serif; padding:20px;">
+  <h1>Elara Desktop</h1>
+  <div>API: <input id="api" value="http://localhost:3001" style="width:320px"></div>
+  <button id="scan" style="margin-top:8px">Scan Clipboard Link</button>
+  <pre id="out" style="background:#111;color:#0f0;padding:12px;border-radius:8px;min-height:120px"></pre>
+  <script>
+    document.getElementById('scan').onclick = async () => {
+      const api = document.getElementById('api').value
+      const data = await window.elara.scanClipboard(api)
+      document.getElementById('out').textContent = JSON.stringify(data, null, 2)
+    }
+  </script>
+</body></html>

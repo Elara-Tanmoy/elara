@@ -1,0 +1,13 @@
+
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Elara Options</title></head>
+<body style="font-family: system-ui, sans-serif; padding: 20px;">
+  <h1>Elara Options</h1>
+  <label>API Base URL <input id="api" style="width: 360px" placeholder="http://localhost:3001"></label>
+  <button id="save">Save</button>
+  <script>
+    const api = document.getElementById('api');
+    chrome.storage.sync.get(['API_BASE'], v => api.value = v.API_BASE || 'http://localhost:3001');
+    document.getElementById('save').onclick = () => chrome.storage.sync.set({ API_BASE: api.value });
+  </script>
+</body></html>
