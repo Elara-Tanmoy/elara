@@ -1,170 +1,72 @@
-# Complete Elara API Deployment Script
-# This script will create a working CommonJS version and deploy it
+# Create the .github/workflows directory
+mkdir -p .github/workflows
 
-Write-Host "🚀 Starting Elara API Complete Deployment..." -ForegroundColor Green
+# Create the deploy-staging.yml file with the workflow content
+cat > .github/workflows/deploy-staging.yml << 'EOF'
+name: Build & Deploy to Staging
 
-# Step 1: Backup current files
-Write-Host "📦 Backing up current API files..." -ForegroundColor Yellow
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$backupDir = "api-backup-$timestamp"
-if (Test-Path "api") {
-    Copy-Item "api" $backupDir -Recurse -Force
-    Write-Host "✅ Backup created: $backupDir" -ForegroundColor Green
-}
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
 
-# Step 2: Create working API directory
-Write-Host "🔧 Creating working API..." -ForegroundColor Yellow
-if (Test-Path "elara-api-working") {
-    Remove-Item "elara-api-working" -Recurse -Force
-}
-New-Item -ItemType Directory -Name "elara-api-working" -Force | Out-Null
+env:
+  WEBAPP_NAME: ${{ secrets.WEBAPP_NAME }}
+  RESOURCE_GROUP: ${{ secrets.RESOURCE_GROUP }}
+  STAGING_SLOT: ${{ secrets.STAGING_SLOT }}
 
-# Step 3: Create package.json
-$packageJson = @'
-{
-  "name": "elara-api",
-  "version": "1.0.0",
-  "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "postinstall": "echo Dependencies installed successfully"
-  },
-  "dependencies": {
-    "axios": "^1.7.2",
-    "cors": "^2.8.5",
-    "express": "^4.19.2"
-  },
-  "engines": {
-    "node": "18.x"
-  }
-}
-'@
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-$packageJson | Out-File -FilePath "elara-api-working\package.json" -Encoding UTF8 -Force
-Write-Host "✅ Created package.json" -ForegroundColor Green
+      - name: Use Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
 
-# Step 4: Create server.js
-$serverJs = @'
-const express = require("express");
-const cors = require("cors");
+      - name: Install dependencies
+        run: |
+          cd api
+          npm ci
 
-console.log("Starting Elara API...");
-console.log("NODE_ENV:", process.env.NODE_ENV);
-console.log("PORT:", process.env.PORT);
+      - name: Run unit tests (if any)
+        run: |
+          # cd api && npm test || echo "no tests configured"
+          echo "Skipping tests (configure if you have tests)."
 
-const app = express();
+      - name: Prepare deployment package (zip)
+        run: |
+          cd api
+          zip -r ../api-deploy.zip . -x "node_modules/**" "*.env" ".git/**"
 
-// Middleware
-app.use(cors({ origin: "*" }));
-app.use(express.json({ limit: "2mb" }));
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-// Basic logging middleware
-app.use((req, res, next) => {
-  console.log(new Date().toISOString() + " - " + req.method + " " + req.path);
-  next();
-});
+      - name: Deploy to WebApp staging slot (ZIP)
+        uses: azure/webapps-deploy@v2
+        with:
+          app-name: ${{ env.WEBAPP_NAME }}
+          slot-name: ${{ env.STAGING_SLOT }}
+          package: ./api-deploy.zip
 
-// Health endpoint
-app.get("/health", (req, res) => {
-  console.log("Health check requested");
-  res.json({
-    ok: true,
-    ts: new Date().toISOString(),
-    provider: process.env.LLM_PROVIDER || "azure_openai",
-    message: "Elara API is running"
-  });
-});
+      - name: Smoke test staging endpoint
+        run: |
+          echo "Waiting for staging site..."
+          sleep 8
+          curl --fail -s "https://${{ env.WEBAPP_NAME }}-${{ env.STAGING_SLOT }}.azurewebsites.net/health" -o /tmp/health.txt
+          cat /tmp/health.txt
+EOF
 
-// Root endpoint
-app.get("/", (req, res) => {
-  console.log("Root endpoint requested");
-  res.send("Elara API online - CommonJS version");
-});
+# Add the workflow file to git
+git add .github/workflows/deploy-staging.yml
 
-// Basic ask-elara endpoint (simplified for now)
-app.post("/ask-elara", (req, res) => {
-  console.log("Ask Elara endpoint requested");
-  res.json({
-    ok: true,
-    message: "Ask Elara endpoint is working",
-    timestamp: new Date().toISOString(),
-    request_body: req.body
-  });
-});
+# Commit the changes
+git commit -m "Add GitHub Actions workflow for staging deployment"
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error("Error occurred:", err);
-  res.status(500).json({
-    ok: false,
-    error: "Internal server error",
-    timestamp: new Date().toISOString()
-  });
-});
-
-// Start server
-const port = process.env.PORT || 8080;
-console.log("Attempting to listen on port " + port + "...");
-
-const server = app.listen(port, "0.0.0.0", () => {
-  console.log("✓ Elara API successfully listening on port " + port);
-  console.log("✓ Server started at " + new Date().toISOString());
-}).on('error', (err) => {
-  console.error("✗ Failed to start server:", err.message);
-  console.error("✗ Error code:", err.code);
-  console.error("✗ Full error:", err);
-});
-
-// Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    console.log('Process terminated');
-  });
-});
-
-module.exports = app;
-'@
-
-$serverJs | Out-File -FilePath "elara-api-working\server.js" -Encoding UTF8 -Force
-Write-Host "✅ Created server.js" -ForegroundColor Green
-
-# Step 5: Create web.config for better Azure support
-$webConfig = @'
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <system.webServer>
-    <webSocket enabled="false" />
-    <handlers>
-      <add name="iisnode" path="server.js" verb="*" modules="iisnode"/>
-    </handlers>
-    <rewrite>
-      <rules>
-        <rule name="NodeInspector" patternSyntax="ECMAScript" stopProcessing="true">
-          <match url="^server.js\/debug[\/]?" />
-        </rule>
-        <rule name="StaticContent">
-          <action type="Rewrite" url="public{REQUEST_URI}"/>
-        </rule>
-        <rule name="DynamicContent">
-          <conditions>
-            <add input="{REQUEST_FILENAME}" matchType="IsFile" negate="True"/>
-          </conditions>
-          <action type="Rewrite" url="server.js"/>
-        </rule>
-      </rules>
-    </rewrite>
-    <security>
-      <requestFiltering>
-        <hiddenSegments>
-          <remove segment="bin"/>
-        </hiddenSegments>
-      </requestFiltering>
-    </security>
-    <httpErrors existingResponse="PassThrough" />
-  </system.webServer>
-</configuration>
-'@
-
-$webConfig | Out-File -FilePath "elara-api-working\web.config" -Encoding UTF8 -Force
-Write-Host "✅ Created web.config" -ForegroundColor Green
+# Push to GitHub
+git push origin main

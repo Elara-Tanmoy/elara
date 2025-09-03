@@ -1,0 +1,40 @@
+﻿# Dependencies
+node_modules/
+npm-debug.log*
+
+# Build outputs
+dist/
+build/
+*.tgz
+*.zip
+
+# Environment and secrets
+.env
+.env.local
+*.pem
+*.pfx
+secrets.json
+azure-credentials.json
+publish-profile.xml
+
+# Logs and debug files
+logs/
+*.log
+*-logs.zip
+*-logs/
+
+# Temporary deployment files
+*-deploy.zip
+*-settings.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Azure deployment files (generated)
+.deployment
+deploy.cmd
