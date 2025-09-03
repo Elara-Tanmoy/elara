@@ -5,14 +5,12 @@ on:
     branches: [develop, main]
   workflow_dispatch:
 
-env:
-  AZURE_WEBAPP_NAME: elara-api-dev
-  RESOURCE_GROUP: rg-elara-dev
-  NODE_VERSION: '18'
-
 jobs:
-  build:
+  deploy-staging:
+    if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
+    environment: staging
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,7 +18,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '18'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       
@@ -29,61 +27,49 @@ jobs:
           cd api
           npm ci --production
       
-      - name: Create deployment package
-        run: |
-          cd api
-          zip -r ../deployment.zip . -x "node_modules/.cache/*" "*.log"
-      
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: api-package
-          path: deployment.zip
-
-  deploy-staging:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/develop'
-    environment: staging
-    
-    steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: api-package
-      
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy to staging
+      - name: Deploy using Azure CLI
         run: |
+          cd api
+          tar -czf ../api-package.tar.gz .
           az webapp deploy \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging \
-            --src-path deployment.zip \
-            --type zip \
+            --src-path ../api-package.tar.gz \
+            --type tar \
             --restart true \
             --clean true
       
-      - name: Test staging deployment
+      - name: Test deployment
         run: |
-          sleep 30
-          curl -f https://elara-api-dev-staging.azurewebsites.net/health || exit 1
+          sleep 45
+          curl -f https://elara-api-dev-staging.azurewebsites.net/health
 
   deploy-production:
-    needs: build
-    runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
     environment: production
     
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          name: api-package
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+      
+      - name: Install dependencies
+        run: |
+          cd api
+          npm ci --production
       
       - name: Azure Login
         uses: azure/login@v1
@@ -92,28 +78,30 @@ jobs:
       
       - name: Deploy to staging first
         run: |
+          cd api
+          tar -czf ../api-package.tar.gz .
           az webapp deploy \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging \
-            --src-path deployment.zip \
-            --type zip \
+            --src-path ../api-package.tar.gz \
+            --type tar \
             --restart true \
             --clean true
       
-      - name: Test staging before production
+      - name: Test staging
         run: |
           sleep 45
-          curl -f https://elara-api-dev-staging.azurewebsites.net/health || exit 1
+          curl -f https://elara-api-dev-staging.azurewebsites.net/health
       
       - name: Swap to production
         run: |
           az webapp deployment slot swap \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.AZURE_WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging
       
       - name: Verify production
         run: |
           sleep 15
-          curl -f https://elara-api-dev.azurewebsites.net/health || exit 1
+          curl -f https://elara-api-dev.azurewebsites.net/health
