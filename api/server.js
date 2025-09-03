@@ -1,4 +1,4 @@
-import express from "express";
+﻿import express from "express";
 import cors from "cors";
 import askElara from "./src/routes/askElara.js";
 
@@ -10,7 +10,7 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     ts: new Date().toISOString(),
-    provider: process.env.LLM_PROVIDER || "azure_openai"
+    provider: process.env.LLM_PROVIDER || "azure_openai_pipeline_test"
   });
 });
 
@@ -19,3 +19,4 @@ app.use("/ask-elara", askElara);
 app.get("/", (_req, res) => res.send("Elara API online"));
 const port = process.env.PORT || 3001;
 app.listen(port, () => console.log(`Elara API listening on ${port}`));
+
