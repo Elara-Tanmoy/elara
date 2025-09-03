@@ -5,103 +5,97 @@ on:
     branches: [develop, main]
   workflow_dispatch:
 
+env:
+  WEBAPP_NAME: elara-api-dev
+  RESOURCE_GROUP: rg-elara-dev
+
 jobs:
   deploy-staging:
     if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
-    environment: staging
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       
-      - name: Install dependencies
+      - name: Build
         run: |
           cd api
           npm ci --production
+          cd ..
+          tar -czf deployment.tar.gz -C api .
       
-      - name: Azure Login
-        uses: azure/login@v1
+      - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy using Azure CLI
+      - name: Deploy
         run: |
-          cd api
-          tar -czf ../api-package.tar.gz .
           az webapp deploy \
-            --resource-group rg-elara-dev \
-            --name elara-api-dev \
+            -g ${{ env.RESOURCE_GROUP }} \
+            -n ${{ env.WEBAPP_NAME }} \
             --slot staging \
-            --src-path ../api-package.tar.gz \
+            --src-path deployment.tar.gz \
             --type tar \
             --restart true \
             --clean true
       
-      - name: Test deployment
+      - name: Test
         run: |
-          sleep 45
+          sleep 30
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
 
   deploy-production:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: production
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       
-      - name: Install dependencies
+      - name: Build
         run: |
           cd api
           npm ci --production
+          cd ..
+          tar -czf deployment.tar.gz -C api .
       
-      - name: Azure Login
-        uses: azure/login@v1
+      - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
       - name: Deploy to staging first
         run: |
-          cd api
-          tar -czf ../api-package.tar.gz .
           az webapp deploy \
-            --resource-group rg-elara-dev \
-            --name elara-api-dev \
+            -g ${{ env.RESOURCE_GROUP }} \
+            -n ${{ env.WEBAPP_NAME }} \
             --slot staging \
-            --src-path ../api-package.tar.gz \
+            --src-path deployment.tar.gz \
             --type tar \
             --restart true \
             --clean true
       
       - name: Test staging
         run: |
-          sleep 45
+          sleep 30
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
       
       - name: Swap to production
         run: |
           az webapp deployment slot swap \
-            --resource-group rg-elara-dev \
-            --name elara-api-dev \
+            -g ${{ env.RESOURCE_GROUP }} \
+            -n ${{ env.WEBAPP_NAME }} \
             --slot staging
       
-      - name: Verify production
+      - name: Test production
         run: |
           sleep 15
           curl -f https://elara-api-dev.azurewebsites.net/health
