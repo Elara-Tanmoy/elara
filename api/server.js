@@ -10,7 +10,7 @@ app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     ts: new Date().toISOString(),
-    provider: process.env.LLM_PROVIDER || "azure_openai_final_fix"
+    provider: process.env.LLM_PROVIDER || "azure_openai_fixed_workflow"
   });
 });
 
@@ -19,6 +19,7 @@ app.use("/ask-elara", askElara);
 app.get("/", (_req, res) => res.send("Elara API online"));
 const port = process.env.PORT || 3001;
 app.listen(port, () => console.log(`Elara API listening on ${port}`));
+
 
 
 

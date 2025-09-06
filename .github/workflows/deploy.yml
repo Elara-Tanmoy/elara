@@ -5,10 +5,6 @@ on:
     branches: [develop, main]
   workflow_dispatch:
 
-env:
-  WEBAPP_NAME: elara-api-dev
-  RESOURCE_GROUP: rg-elara-dev
-
 jobs:
   deploy-staging:
     if: github.ref == 'refs/heads/develop'
@@ -22,29 +18,29 @@ jobs:
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       
-      - name: Build
+      - name: Install dependencies
         run: |
           cd api
           npm ci --production
-          cd ..
-          tar -czf deployment.tar.gz -C api .
       
       - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy
+      - name: Deploy to staging
         run: |
+          cd api
+          tar -czf ../deploy.tar.gz .
           az webapp deploy \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n ${{ env.WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging \
-            --src-path deployment.tar.gz \
+            --src-path ../deploy.tar.gz \
             --type tar \
             --restart true \
             --clean true
       
-      - name: Test
+      - name: Test staging
         run: |
           sleep 30
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
@@ -61,12 +57,10 @@ jobs:
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       
-      - name: Build
+      - name: Install dependencies
         run: |
           cd api
           npm ci --production
-          cd ..
-          tar -czf deployment.tar.gz -C api .
       
       - uses: azure/login@v1
         with:
@@ -74,11 +68,13 @@ jobs:
       
       - name: Deploy to staging first
         run: |
+          cd api
+          tar -czf ../deploy.tar.gz .
           az webapp deploy \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n ${{ env.WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging \
-            --src-path deployment.tar.gz \
+            --src-path ../deploy.tar.gz \
             --type tar \
             --restart true \
             --clean true
@@ -91,8 +87,8 @@ jobs:
       - name: Swap to production
         run: |
           az webapp deployment slot swap \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n ${{ env.WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging
       
       - name: Test production

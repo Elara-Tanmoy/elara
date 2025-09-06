@@ -1,20 +1,11 @@
-# Final fix - completely replace the broken workflow
-Write-Host "=== FINAL DEVOPS FIX ===" -ForegroundColor Magenta
-
-# Delete the old broken workflow and create a working one
-Remove-Item ".github\workflows\*.yml" -Force -ErrorAction SilentlyContinue
-
-$workingWorkflow = @'
+# Replace the broken workflow with a working one
+$fixedWorkflow = @'
 name: Deploy Elara API
 
 on:
   push:
     branches: [develop, main]
   workflow_dispatch:
-
-env:
-  WEBAPP_NAME: elara-api-dev
-  RESOURCE_GROUP: rg-elara-dev
 
 jobs:
   deploy-staging:
@@ -29,29 +20,29 @@ jobs:
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       
-      - name: Build
+      - name: Install dependencies
         run: |
           cd api
           npm ci --production
-          cd ..
-          tar -czf deployment.tar.gz -C api .
       
       - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy
+      - name: Deploy to staging
         run: |
+          cd api
+          tar -czf ../deploy.tar.gz .
           az webapp deploy \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n ${{ env.WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging \
-            --src-path deployment.tar.gz \
+            --src-path ../deploy.tar.gz \
             --type tar \
             --restart true \
             --clean true
       
-      - name: Test
+      - name: Test staging
         run: |
           sleep 30
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
@@ -68,12 +59,10 @@ jobs:
           cache: 'npm'
           cache-dependency-path: api/package-lock.json
       
-      - name: Build
+      - name: Install dependencies
         run: |
           cd api
           npm ci --production
-          cd ..
-          tar -czf deployment.tar.gz -C api .
       
       - uses: azure/login@v1
         with:
@@ -81,11 +70,13 @@ jobs:
       
       - name: Deploy to staging first
         run: |
+          cd api
+          tar -czf ../deploy.tar.gz .
           az webapp deploy \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n ${{ env.WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging \
-            --src-path deployment.tar.gz \
+            --src-path ../deploy.tar.gz \
             --type tar \
             --restart true \
             --clean true
@@ -98,8 +89,8 @@ jobs:
       - name: Swap to production
         run: |
           az webapp deployment slot swap \
-            -g ${{ env.RESOURCE_GROUP }} \
-            -n ${{ env.WEBAPP_NAME }} \
+            --resource-group rg-elara-dev \
+            --name elara-api-dev \
             --slot staging
       
       - name: Test production
@@ -108,75 +99,30 @@ jobs:
           curl -f https://elara-api-dev.azurewebsites.net/health
 '@
 
-# Create the working workflow
-New-Item -Path ".github\workflows" -ItemType Directory -Force
-$workingWorkflow | Out-File -FilePath ".github\workflows\deploy.yml" -Encoding utf8
+# Replace the workflow
+$fixedWorkflow | Out-File -FilePath ".github\workflows\deploy.yml" -Encoding utf8
 
-Write-Host "Created working workflow file" -ForegroundColor Green
+# Test the fix
+$testContent = Get-Content api/server.js -Raw
+$testContent = $testContent -replace '"azure_openai.*"', '"azure_openai_fixed_workflow"'
+$testContent | Out-File -FilePath api/server.js -Encoding utf8
 
-# Update server.js to test the new workflow
-$serverJs = Get-Content api/server.js -Raw
-$serverJs = $serverJs -replace '"azure_openai.*"', '"azure_openai_final_fix"'
-$serverJs | Out-File -FilePath api/server.js -Encoding utf8
-
-# Commit and push to trigger the working workflow
 git add .
-git commit -m "FINAL FIX: Replace broken workflow with working Azure CLI deployment"
+git commit -m "Fix: Replace broken webapps-deploy with working Azure CLI deployment"
 git push origin develop
 
-Write-Host "New working workflow deployed. Testing..." -ForegroundColor Yellow
+Write-Host "Fixed workflow deployed. Monitor at:" -ForegroundColor Green
+Write-Host "https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
 
-# Monitor the deployment
-$timeout = 180
-$elapsed = 0
-$success = $false
-
-while ($elapsed -lt $timeout -and -not $success) {
-    Start-Sleep 20
-    $elapsed += 20
-    
-    try {
-        $health = Invoke-RestMethod -Uri "https://elara-api-dev-staging.azurewebsites.net/health" -Method GET -TimeoutSec 10
-        
-        if ($health.provider -eq "azure_openai_final_fix") {
-            $success = $true
-            Write-Host "SUCCESS! GitHub Actions deployment working!" -ForegroundColor Green
-            Write-Host "Health check: $($health | ConvertTo-Json)" -ForegroundColor White
-            
-            # Test the API
-            $apiBody = @{
-                question = "Final deployment test"
-                context = @{ url = "working-pipeline.com" }
-            } | ConvertTo-Json
-            
-            $apiResponse = Invoke-RestMethod -Uri "https://elara-api-dev-staging.azurewebsites.net/ask-elara" -Method POST -Body $apiBody -ContentType "application/json" -TimeoutSec 10
-            Write-Host "API working: $($apiResponse.answer)" -ForegroundColor Green
-            
-        } else {
-            Write-Host "Deployment in progress... ${elapsed}s elapsed" -ForegroundColor Yellow
-        }
-    } catch {
-        Write-Host "Waiting for deployment... ${elapsed}s elapsed" -ForegroundColor Yellow
+# Wait and verify
+Start-Sleep 120
+try {
+    $result = Invoke-RestMethod -Uri "https://elara-api-dev-staging.azurewebsites.net/health" -Method GET -TimeoutSec 15
+    if ($result.provider -eq "azure_openai_fixed_workflow") {
+        Write-Host "SUCCESS! Deployment working with fixed workflow" -ForegroundColor Green
+    } else {
+        Write-Host "Still deploying or failed. Current: $($result.provider)" -ForegroundColor Yellow
     }
-}
-
-if ($success) {
-    Write-Host "`nDEVOPS PIPELINE FULLY OPERATIONAL!" -ForegroundColor Green
-    
-    # Test production deployment
-    Write-Host "Testing production deployment..." -ForegroundColor Yellow
-    git checkout main
-    git merge develop --no-edit
-    git push origin main
-    
-    Write-Host "Production deployment triggered" -ForegroundColor Cyan
-    Write-Host "Monitor at: https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
-    
-    Write-Host "`nYour complete DevOps pipeline:" -ForegroundColor Yellow
-    Write-Host "develop branch -> staging deployment (working)" -ForegroundColor Green
-    Write-Host "main branch -> production deployment (testing)" -ForegroundColor Green
-    
-} else {
-    Write-Host "Deployment failed or timed out" -ForegroundColor Red
-    Write-Host "Check: https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
+} catch {
+    Write-Host "Deployment verification failed: $($_.Exception.Message)" -ForegroundColor Red
 }
