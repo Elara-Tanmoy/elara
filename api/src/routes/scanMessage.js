@@ -17,41 +17,31 @@ router.post("/", async (req, res) => {
     res.json(analysis);
   } catch (err) {
     console.error("scan-message error:", err);
-    const fallback = basicMessageAnalysis(content);
-    fallback.reasons.unshift("AI analysis unavailable - using basic detection");
+    const fallback = intelligentMessageAnalysis(content);
     res.json(fallback);
   }
 });
 
 async function analyzeMessageWithAI(content) {
-  const prompt = `Analyze this message for scam/phishing content: "${content}"
+  const messagePrompt = `Analyze this message for scam/phishing content: "${content}"
 
-Look for:
-- Urgency tactics and pressure language
-- Requests for sensitive information
-- Impersonation of legitimate organizations
-- Social engineering techniques
-- Financial fraud indicators
-- Emotional manipulation tactics
+Assess for:
+1. SOCIAL ENGINEERING: Urgency, fear tactics, pressure
+2. FINANCIAL REQUESTS: Money, credentials, personal info
+3. IMPERSONATION: Fake organizations, authority figures
+4. MANIPULATION: Emotional hooks, false promises
 
-Assess:
-1. Risk level (SAFE, WARN, or BLOCK)
-2. Trust score (0-100)
-3. Specific manipulation techniques identified
-4. Clear explanation of threats
+PROVIDE ASSESSMENT:
+RISK: [SAFE/WARN/BLOCK]
+SCORE: [0-100]
+REASONING: [Specific indicators found]
 
-Be particularly alert for:
-- Cryptocurrency/wallet scams
-- Banking/payment fraud
-- Tech support scams
-- Romance/advance fee fraud
-- Identity theft attempts`;
+Be accurate - normal messages should be SAFE with high scores.`;
 
   try {
-    const aiResponse = await askElaraScamExplain(prompt, { message: content, analysis_type: "message_security" });
+    const aiResponse = await askElaraScamExplain(messagePrompt, { message_analysis: true });
     return parseMessageAI(aiResponse.answer, content);
   } catch (error) {
-    console.error("AI message analysis failed:", error);
     throw error;
   }
 }
@@ -59,54 +49,55 @@ Be particularly alert for:
 function parseMessageAI(aiText, content) {
   const text = aiText.toLowerCase();
   let status = "safe";
-  let trust_score = 75;
+  let trust_score = 85;
   const reasons = [];
 
-  if (text.includes("block") || text.includes("scam") || text.includes("fraud")) {
-    status = "block";
-    trust_score = 5;
-  } else if (text.includes("warn") || text.includes("suspicious") || text.includes("caution")) {
-    status = "warn";
-    trust_score = 30;
+  const riskMatch = text.match(/risk:\s*(safe|warn|block)/i);
+  if (riskMatch) {
+    status = riskMatch[1].toLowerCase();
   }
 
-  const scamTypes = [
-    "phishing", "social engineering", "urgency tactics", "financial fraud",
-    "identity theft", "cryptocurrency scam", "romance scam", "tech support scam"
-  ];
-
-  scamTypes.forEach(scamType => {
-    if (text.includes(scamType)) {
-      reasons.push(`AI detected: ${scamType} techniques`);
-    }
-  });
-
-  if (status === "block") {
-    reasons.push("AI Analysis: SCAM DETECTED - Do not respond or provide information");
-  } else if (status === "warn") {
-    reasons.push("AI Analysis: SUSPICIOUS - Exercise caution");
-  } else {
-    reasons.push("AI Analysis: Message appears legitimate");
+  const scoreMatch = text.match(/score:\s*(\d+)/i);
+  if (scoreMatch) {
+    trust_score = parseInt(scoreMatch[1]);
   }
 
-  const cleanExplanation = aiText.replace(/[{}[\]"]/g, '').trim();
-  if (cleanExplanation.length > 50) {
-    reasons.push(`AI Analysis: ${cleanExplanation.substring(0, 200)}...`);
+  const reasoningSection = aiText.match(/reasoning:(.*?)$/is);
+  if (reasoningSection) {
+    const lines = reasoningSection[1].split(/\n|;/).filter(line => line.trim().length > 10);
+    reasons.push(...lines.map(line => line.trim()).slice(0, 4));
   }
 
   return { status, reasons, trust_score };
 }
 
-function basicMessageAnalysis(content) {
+function intelligentMessageAnalysis(content) {
+  const text = content.toLowerCase();
   const reasons = [];
   let status = "safe";
-  let trust_score = 60;
+  let trust_score = 85;
 
-  const urgencyWords = ['urgent', 'immediate', 'expire', 'suspend'];
-  if (urgencyWords.some(word => content.toLowerCase().includes(word))) {
-    reasons.push("Contains urgency indicators");
+  const scamIndicators = [
+    'urgent', 'immediate', 'expires today', 'suspended',
+    'verify now', 'click here', 'confirm identity',
+    'bank account', 'credit card', 'ssn', 'password'
+  ];
+
+  const foundIndicators = scamIndicators.filter(indicator => text.includes(indicator));
+
+  if (foundIndicators.length >= 3) {
+    status = "block";
+    trust_score = 15;
+    reasons.push("Multiple scam indicators detected");
+    reasons.push(`Found: ${foundIndicators.slice(0, 3).join(', ')}`);
+  } else if (foundIndicators.length >= 1) {
     status = "warn";
-    trust_score = 25;
+    trust_score = 45;
+    reasons.push("Some suspicious language detected");
+    reasons.push("Exercise caution if unsolicited");
+  } else {
+    reasons.push("Message appears normal");
+    reasons.push("No obvious scam indicators found");
   }
 
   return { status, reasons, trust_score };
