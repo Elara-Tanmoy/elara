@@ -1,144 +1,70 @@
-# Final working deployment workflow
-$workingWorkflow = @'
-name: Deploy Elara API
+# First, handle the uncommitted changes
+Write-Host "Handling uncommitted changes..." -ForegroundColor Yellow
 
-on:
-  push:
-    branches: [develop, main]
-  workflow_dispatch:
+# Check what files have changes
+git status
 
-jobs:
-  deploy-staging:
-    if: github.ref == 'refs/heads/develop'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: api/package-lock.json
-      
-      - name: Install dependencies
-        run: |
-          cd api
-          npm ci --production
-      
-      - name: Create clean deployment package
-        run: |
-          cd api
-          zip -r ../deployment.zip . -x "*.log" "*.tmp" ".git/*"
-      
-      - uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-      
-      - name: Deploy to staging using ZIP
-        run: |
-          az webapp deploy \
-            --resource-group rg-elara-dev \
-            --name elara-api-dev \
-            --slot staging \
-            --src-path deployment.zip \
-            --type zip \
-            --restart true \
-            --clean true
-      
-      - name: Test staging
-        run: |
-          sleep 45
-          curl -f https://elara-api-dev-staging.azurewebsites.net/health
-
-  deploy-production:
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: api/package-lock.json
-      
-      - name: Install dependencies
-        run: |
-          cd api
-          npm ci --production
-      
-      - name: Create deployment package
-        run: |
-          cd api
-          zip -r ../deployment.zip . -x "*.log" "*.tmp" ".git/*"
-      
-      - uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-      
-      - name: Deploy to staging first
-        run: |
-          az webapp deploy \
-            --resource-group rg-elara-dev \
-            --name elara-api-dev \
-            --slot staging \
-            --src-path deployment.zip \
-            --type zip \
-            --restart true \
-            --clean true
-      
-      - name: Test staging
-        run: |
-          sleep 45
-          curl -f https://elara-api-dev-staging.azurewebsites.net/health
-      
-      - name: Swap to production
-        run: |
-          az webapp deployment slot swap \
-            --resource-group rg-elara-dev \
-            --name elara-api-dev \
-            --slot staging
-      
-      - name: Test production
-        run: |
-          sleep 20
-          curl -f https://elara-api-dev.azurewebsites.net/health
-'@
-
-# Update the workflow
-$workingWorkflow | Out-File -FilePath ".github\workflows\deploy.yml" -Encoding utf8
-
-# Make a test change
-$serverContent = Get-Content api/server.js -Raw
-$serverContent = $serverContent -replace '"azure_openai.*"', '"azure_openai_cli_zip_deploy"'
-$serverContent | Out-File -FilePath api/server.js -Encoding utf8
-
+# Commit or stash the changes
 git add .
-git commit -m "Fix: Use correct Azure CLI zip deployment method"
-git push origin develop
+git commit -m "Save deployment script changes"
 
-Write-Host "Corrected workflow deployed - using ZIP with Azure CLI" -ForegroundColor Green
-Write-Host "Monitor: https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
+# Now switch to main and merge
+Write-Host "Switching to main branch..." -ForegroundColor Yellow
+git checkout main
+git merge develop --no-edit
+git push origin main
 
-# Monitor the deployment
-$timeout = 180
+Write-Host "Production deployment triggered!" -ForegroundColor Green
+Write-Host "Monitor at: https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
+
+# Monitor the production deployment
+$timeout = 300
 $elapsed = 0
+$prodSuccess = $false
 
-while ($elapsed -lt $timeout) {
+Write-Host "Monitoring production deployment..." -ForegroundColor Yellow
+
+while ($elapsed -lt $timeout -and -not $prodSuccess) {
     Start-Sleep 30
     $elapsed += 30
     
     try {
-        $health = Invoke-RestMethod -Uri "https://elara-api-dev-staging.azurewebsites.net/health" -Method GET -TimeoutSec 15
+        # Test production endpoint
+        $prodHealth = Invoke-RestMethod -Uri "https://elara-api-dev.azurewebsites.net/health" -Method GET -TimeoutSec 15
         
-        if ($health.provider -eq "azure_openai_cli_zip_deploy") {
-            Write-Host "SUCCESS! Azure CLI ZIP deployment working!" -ForegroundColor Green
-            Write-Host "Health response: $($health | ConvertTo-Json)" -ForegroundColor White
-            break
+        if ($prodHealth.provider -eq "azure_openai_cli_zip_deploy") {
+            $prodSuccess = $true
+            Write-Host "SUCCESS! Production deployment complete!" -ForegroundColor Green
+            Write-Host "Production health: $($prodHealth | ConvertTo-Json)" -ForegroundColor White
+            
+            # Test production API
+            $prodApi = @{
+                question = "Production deployment test"
+                context = @{ url = "production-test.com" }
+            } | ConvertTo-Json
+            
+            $prodApiResult = Invoke-RestMethod -Uri "https://elara-api-dev.azurewebsites.net/ask-elara" -Method POST -Body $prodApi -ContentType "application/json" -TimeoutSec 15
+            Write-Host "Production API: $($prodApiResult.answer)" -ForegroundColor Green
+            
         } else {
-            Write-Host "Deployment in progress... (${elapsed}s) Current: $($health.provider)" -ForegroundColor Yellow
+            Write-Host "Production deployment in progress... (${elapsed}s)" -ForegroundColor Yellow
         }
     } catch {
-        Write-Host "Waiting for deployment completion... (${elapsed}s)" -ForegroundColor Yellow
+        Write-Host "Waiting for production deployment... (${elapsed}s)" -ForegroundColor Yellow
     }
+}
+
+if ($prodSuccess) {
+    Write-Host "DEVOPS PIPELINE FULLY OPERATIONAL!" -ForegroundColor Green
+    Write-Host "Repository: https://github.com/Elara-Tanmoy/elara.git" -ForegroundColor Cyan
+    Write-Host "Production: https://elara-api-dev.azurewebsites.net" -ForegroundColor Green
+    Write-Host "Staging: https://elara-api-dev-staging.azurewebsites.net" -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "DevOps workflow complete:" -ForegroundColor Cyan
+    Write-Host "develop branch -> staging deployment" -ForegroundColor Green
+    Write-Host "main branch -> production deployment" -ForegroundColor Green
+    
+} else {
+    Write-Host "Production deployment timeout. Check:" -ForegroundColor Red
+    Write-Host "https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
 }
