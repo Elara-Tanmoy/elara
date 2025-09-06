@@ -20,7 +20,7 @@ app.get("/health", (_req, res) => {
 });
 
 // Root endpoint
-app.get("/", (_req, res) => res.send("Elara API online - Full dashboard support enabled"));
+app.get("/", (_req, res) => res.send("Elara API - Full threat detection capabilities"));
 
 // API routes
 app.use("/ask-elara", askElara);
