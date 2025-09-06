@@ -1,99 +1,69 @@
-﻿import React, { useState } from 'react';
-import './App.css';
+﻿import React, { useState } from 'react'
 
 function App() {
-  const [inputValue, setInputValue] = useState('');
-  const [result, setResult] = useState(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [input, setInput] = useState('')
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-  // Production API Endpoint
-  const API_ENDPOINT = 'https://elara-api-dev.azurewebsites.net'; 
-
-  const handleScan = async () => {
-    if (!inputValue) return;
-    setIsLoading(true);
-    setResult(null);
-
-    const isUrl = inputValue.startsWith('http');
-    const endpoint = isUrl ? `${API_ENDPOINT}/scan-link` : `${API_ENDPOINT}/scan-message`;
-    const body = isUrl ? { url: inputValue } : { content: inputValue };
-
+  const scan = async () => {
+    if (!input) return
+    setLoading(true)
+    
+    const isUrl = input.startsWith('http')
+    const endpoint = isUrl ? '/scan-link' : '/scan-message'
+    const body = isUrl ? {url: input} : {content: input}
+    
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetch('https://elara-api-dev.azurewebsites.net' + endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      setResult(data);
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      })
+      const data = await response.json()
+      setResult(data)
     } catch (error) {
-      console.error('Scan failed:', error);
-      setResult({ status: 'error', reasons: ['Failed to connect to the analysis service.'] });
-    } finally {
-      setIsLoading(false);
+      setResult({status: 'error', reasons: ['API connection failed']})
     }
-  };
-
-  const getResultClass = (status) => {
-    switch (status) {
-      case 'safe': return 'status-safe';
-      case 'warn': return 'status-warn';
-      case 'block': return 'status-block';
-      default: return 'status-error';
-    }
-  };
+    setLoading(false)
+  }
 
   return (
-    <div className="dashboard">
-      <header>
-        <h1>Elara Security Dashboard</h1>
-        <p>Your real-time protection summary</p>
-      </header>
-      <div className="stats-grid">
-        <div className="stat-card">
-          <h2>Safety Score</h2>
-          <p className="score">99.8%</p>
-        </div>
-        <div className="stat-card">
-          <h2>Links Scanned</h2>
-          <p>4,301</p>
-        </div>
-        <div className="stat-card">
-          <h2>Threats Blocked</h2>
-          <p>12</p>
-        </div>
+    <div style={{maxWidth: '800px', margin: '50px auto', padding: '20px', fontFamily: 'Arial'}}>
+      <h1>Elara Security Dashboard</h1>
+      
+      <div style={{margin: '20px 0'}}>
+        <textarea 
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          placeholder="Enter URL or message to scan..."
+          style={{width: '70%', height: '80px', padding: '10px'}}
+        />
+        <br/>
+        <button 
+          onClick={scan} 
+          disabled={loading}
+          style={{padding: '10px 20px', background: '#065f46', color: 'white', border: 'none', marginTop: '10px'}}
+        >
+          {loading ? 'Scanning...' : 'Scan'}
+        </button>
       </div>
-      <main className="scan-section">
-        <h2>Manual Scan</h2>
-        <p>Paste a link or message to check its safety.</p>
-        <div className="scan-input-area">
-          <textarea
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            placeholder="Enter a URL or message to scan..."
-          />
-          <button onClick={handleScan} disabled={isLoading}>
-            {isLoading ? 'Scanning...' : 'Scan'}
-          </button>
+
+      {result && (
+        <div style={{
+          padding: '15px', 
+          borderRadius: '5px',
+          background: result.status === 'safe' ? '#f0fdf4' : result.status === 'warn' ? '#fefce8' : '#fef2f2',
+          borderLeft: result.status === 'safe' ? '4px solid #22c55e' : result.status === 'warn' ? '4px solid #f59e0b' : '4px solid #ef4444'
+        }}>
+          <h3>Result: {result.status.toUpperCase()}</h3>
+          {result.trust_score && <p>Trust Score: {result.trust_score}/100</p>}
+          <ul>
+            {result.reasons.map((reason, i) => <li key={i}>{reason}</li>)}
+          </ul>
         </div>
-        {result && (
-          <div className={`result-card ${getResultClass(result.status)}`}>
-            <div className="result-header">
-              <h3>Scan Result: <span className="status-text">{result.status.toUpperCase()}</span></h3>
-              {result.trust_score !== undefined && (
-                <div className="trust-score">
-                  Trust Score: <strong>{result.trust_score}/100</strong>
-                </div>
-              )}
-            </div>
-            <ul className="reasons-list">
-              {result.reasons.map((reason, index) => <li key={index}>{reason}</li>)}
-            </ul>
-          </div>
-        )}
-      </main>
+      )}
     </div>
-  );
+  )
 }
 
-export default App;
+export default App

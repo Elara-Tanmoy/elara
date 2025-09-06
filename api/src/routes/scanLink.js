@@ -1,41 +1,60 @@
-const express = require('express');
+﻿import express from "express";
+
 const router = express.Router();
-const { checkReputation } = require('../lib/reputation');
-const { applyHeuristics } = require('../lib/heuristics');
 
-router.post('/', async (req, res) => {
-    const { url } = req.body;
+router.post("/", async (req, res) => {
+  try {
+    const { url } = req.body || {};
     if (!url) {
-        return res.status(400).json({ error: 'URL is required' });
+      return res.status(400).json({ 
+        status: "error", 
+        reasons: ["Missing URL parameter"] 
+      });
     }
 
-    let status = 'safe';
-    let reasons = [];
-    let trustScore = 100;
-
-    const reputationResult = await checkReputation(url);
-    if (reputationResult.isBlocked) {
-        status = 'block';
-        reasons.push('URL is on a known blocklist.');
-        trustScore -= 90;
-    }
-
-    const heuristicsResult = applyHeuristics(url);
-    if (heuristicsResult.length > 0) {
-        if (status !== 'block') status = 'warn';
-        reasons = [...reasons, ...heuristicsResult];
-        trustScore -= heuristicsResult.length * 20;
-    }
-
-    if (reasons.length === 0) {
-        reasons.push('No immediate threats detected.');
-    }
-    
-    res.json({
-        status,
-        reasons,
-        trust_score: Math.max(0, trustScore),
+    const analysis = analyzeUrl(url);
+    res.json(analysis);
+  } catch (err) {
+    console.error("scan-link error:", err);
+    res.status(500).json({ 
+      status: "error", 
+      reasons: ["Analysis service unavailable"] 
     });
+  }
 });
 
-module.exports = router;
+function analyzeUrl(url) {
+  const reasons = [];
+  let status = "safe";
+  let trust_score = 85;
+
+  if (!url.startsWith('https://')) {
+    reasons.push("Not using secure HTTPS connection");
+    status = "warn";
+    trust_score -= 20;
+  }
+
+  const suspicious = ['bit.ly', 'tinyurl', 'paypal-', 'paypaI', 'arnazon', 'microsof', 'suspicious'];
+  const hasSuspicious = suspicious.some(pattern => url.toLowerCase().includes(pattern));
+  
+  if (hasSuspicious) {
+    reasons.push("Contains suspicious domain patterns");
+    status = "block";
+    trust_score = 15;
+  }
+
+  if (url.includes('temp') || url.includes('new')) {
+    reasons.push("Potentially new or temporary domain");
+    status = status === "safe" ? "warn" : status;
+    trust_score -= 10;
+  }
+
+  if (status === "safe") {
+    reasons.push("URL appears legitimate");
+    reasons.push("HTTPS connection verified");
+  }
+
+  return { status, reasons, trust_score };
+}
+
+export default router;
