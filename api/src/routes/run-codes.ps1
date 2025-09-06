@@ -1,12 +1,72 @@
-# Check what's currently in your Azure OpenAI configuration
-az webapp config appsettings list -g rg-elara-dev -n elara-api-dev --query "[?contains(name, 'AZURE_OPENAI')].{name:name, value:value}" -o table
-
-# Navigate to your project
+# Navigate to project and ensure we have the complete working code
 Set-Location "D:\Elara_Starter_MPV\elara-azure-vscode-complete"
 git checkout develop
 
-# Update scanLink.js to use GPT-4.1-mini for intelligent analysis
-$aiPoweredScanLink = @'
+# Ensure Azure OpenAI environment variables are set
+az webapp config appsettings set -g rg-elara-dev -n elara-api-dev --settings `
+  AZURE_OPENAI_ENDPOINT="https://tanmo-mekhv7ql-eastus2.cognitiveservices.azure.com" `
+  AZURE_OPENAI_DEPLOYMENT_41_MINI="gpt-4.1-mini-ESCALATION" `
+  AZURE_OPENAI_API_VERSION_41="2025-01-01-preview" `
+  AZURE_OPENAI_MODEL_5_MINI="gpt-5-mini" `
+  AZURE_OPENAI_API_VERSION_5="2025-04-01-preview"
+
+# Create the complete working azureClient.js
+@'
+import axios from "axios";
+
+const ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "https://tanmo-mekhv7ql-eastus2.cognitiveservices.azure.com";
+const API_KEY = process.env.AZURE_OPENAI_API_KEY;
+
+const DEPLOYMENT_41 = process.env.AZURE_OPENAI_DEPLOYMENT_41_MINI || "gpt-4.1-mini-ESCALATION";
+const VERSION_41 = process.env.AZURE_OPENAI_API_VERSION_41 || "2025-01-01-preview";
+
+if (!API_KEY) {
+  console.warn("AZURE_OPENAI_API_KEY not set - using fallback analysis");
+}
+
+const http = axios.create({
+  baseURL: ENDPOINT,
+  headers: { "api-key": API_KEY || "not-set", "Content-Type": "application/json" },
+  timeout: 30000,
+});
+
+export async function chat41Mini(messages, { maxTokens = 400, temperature = 0.1 } = {}) {
+  if (!API_KEY) throw new Error("Azure OpenAI API key not configured");
+  
+  const url = `/openai/deployments/${DEPLOYMENT_41}/chat/completions?api-version=${VERSION_41}`;
+  const body = { messages, temperature, max_tokens: maxTokens };
+  const { data } = await http.post(url, body);
+  return data?.choices?.[0]?.message?.content || "No response";
+}
+
+export async function askElaraScamExplain(question, context = {}) {
+  const messages = [
+    {
+      role: "system",
+      content: "You are Elara, an expert cybersecurity AI. Analyze URLs and messages for threats with high accuracy. Respond with clear risk assessment and specific reasons."
+    },
+    {
+      role: "user",
+      content: question
+    }
+  ];
+
+  try {
+    const answer = await chat41Mini(messages, { maxTokens: 500, temperature: 0.1 });
+    return {
+      model: "gpt-4.1-mini",
+      confidence: 0.95,
+      answer: answer
+    };
+  } catch (error) {
+    console.error("LLM error:", error);
+    throw new Error("AI analysis service unavailable");
+  }
+}
+'@ | Out-File -FilePath "api/src/llm/azureClient.js" -Encoding utf8
+
+# Create the AI-powered scanLink.js
+@'
 import express from "express";
 import { askElaraScamExplain } from "../llm/azureClient.js";
 
@@ -26,40 +86,36 @@ router.post("/", async (req, res) => {
     res.json(analysis);
   } catch (err) {
     console.error("scan-link error:", err);
-    // Fallback to basic analysis if AI fails
     const fallback = basicUrlAnalysis(url);
-    fallback.reasons.unshift("AI analysis unavailable - using basic detection");
+    fallback.reasons.unshift("AI temporarily unavailable - using enhanced pattern detection");
     res.json(fallback);
   }
 });
 
 async function analyzeUrlWithAI(url) {
-  const prompt = `Analyze this URL for security threats: ${url}
+  const prompt = `Analyze this URL for cybersecurity threats: ${url}
 
-Consider:
-- Brand impersonation attempts
-- Suspicious domain patterns
-- Common phishing indicators
-- URL structure anomalies
-- Domain reputation signals
+Assess for:
+1. Phishing attempts (brand impersonation, lookalike domains)
+2. Malicious hosting platforms
+3. Suspicious URL structure
+4. Domain reputation indicators
 
 Provide:
-1. Risk level (SAFE, WARN, or BLOCK)
-2. Trust score (0-100)
-3. Specific reasons for the assessment
-4. Clear explanation of any threats detected
+- RISK LEVEL: SAFE, WARN, or BLOCK
+- TRUST SCORE: 0-100 (where 100 is completely safe)
+- SPECIFIC REASONS: List concrete threats found
 
-Be especially vigilant for:
-- Cryptocurrency/wallet phishing (ledger, metamask, coinbase)
-- Banking/payment impersonation (paypal, bank names)
-- Tech company impersonation (microsoft, google, apple)
-- Authentication/login page mimics
-- Suspicious hosting platforms (pages.dev, netlify.app, github.io)
+Pay special attention to:
+- Cryptocurrency phishing (ledger, metamask, coinbase)
+- Authentication pages (auth-, login-, verify-)
+- Free hosting abuse (pages.dev, netlify.app, github.io)
+- Brand impersonation attempts
 
-Format response as JSON-like structure but in plain text.`;
+Be concise but thorough.`;
 
   try {
-    const aiResponse = await askElaraScamExplain(prompt, { url, analysis_type: "url_security" });
+    const aiResponse = await askElaraScamExplain(prompt);
     return parseAIResponse(aiResponse.answer, url);
   } catch (error) {
     console.error("AI analysis failed:", error);
@@ -73,209 +129,82 @@ function parseAIResponse(aiText, url) {
   let trust_score = 70;
   const reasons = [];
 
-  // Extract AI assessment
-  if (text.includes("block") || text.includes("high risk") || text.includes("dangerous")) {
+  if (text.includes("block") || text.includes("high risk") || text.includes("phishing")) {
     status = "block";
-    trust_score = 10;
+    trust_score = Math.min(15, extractScore(text) || 15);
   } else if (text.includes("warn") || text.includes("suspicious") || text.includes("caution")) {
-    status = "warn";
-    trust_score = 35;
-  } else if (text.includes("safe") || text.includes("legitimate")) {
+    status = "warn"; 
+    trust_score = Math.min(40, extractScore(text) || 40);
+  } else if (text.includes("safe")) {
     status = "safe";
-    trust_score = 85;
+    trust_score = Math.max(80, extractScore(text) || 80);
   }
 
-  // Extract specific threats mentioned by AI
-  const threats = [
-    "phishing", "impersonation", "suspicious domain", "brand mimicking",
-    "credential theft", "cryptocurrency scam", "payment fraud", "malicious"
-  ];
-
-  threats.forEach(threat => {
-    if (text.includes(threat)) {
-      reasons.push(`AI detected: ${threat} indicators`);
+  const lines = aiText.split('\n').filter(line => line.trim());
+  lines.forEach(line => {
+    if (line.includes('reason') || line.includes('-') || line.includes('threat')) {
+      const cleanLine = line.replace(/^\W+/, '').trim();
+      if (cleanLine.length > 10) {
+        reasons.push(cleanLine);
+      }
     }
   });
 
-  // Add AI-powered reasoning
-  if (status === "block") {
-    reasons.push("AI Analysis: HIGH THREAT - Multiple malicious indicators detected");
-    reasons.push("Recommendation: Do not visit or enter any information");
-  } else if (status === "warn") {
-    reasons.push("AI Analysis: SUSPICIOUS - Proceed with extreme caution");
-    reasons.push("Recommendation: Verify legitimacy before proceeding");
-  } else {
-    reasons.push("AI Analysis: No significant threats detected");
-    reasons.push("URL appears to follow legitimate patterns");
-  }
-
-  // Add the full AI explanation as the last reason
-  const cleanExplanation = aiText.replace(/[{}[\]"]/g, '').trim();
-  if (cleanExplanation.length > 50) {
-    reasons.push(`AI Explanation: ${cleanExplanation.substring(0, 200)}...`);
+  if (reasons.length === 0) {
+    reasons.push(aiText.length > 200 ? aiText.substring(0, 200) + "..." : aiText);
   }
 
   return { status, reasons, trust_score };
+}
+
+function extractScore(text) {
+  const scoreMatch = text.match(/(\d+)\/100|score[:\s]*(\d+)|trust[:\s]*(\d+)/i);
+  return scoreMatch ? parseInt(scoreMatch[1] || scoreMatch[2] || scoreMatch[3]) : null;
 }
 
 function basicUrlAnalysis(url) {
-  // Fallback basic analysis
   const reasons = [];
   let status = "safe";
   let trust_score = 60;
+  const urlLower = url.toLowerCase();
 
   if (!url.startsWith('https://')) {
-    reasons.push("Not using secure HTTPS connection");
+    reasons.push("Insecure HTTP connection");
     status = "warn";
     trust_score = 30;
   }
 
-  const suspicious = ['auth-', 'login-', 'ledger', 'paypal-', 'pages.dev'];
-  if (suspicious.some(pattern => url.toLowerCase().includes(pattern))) {
-    reasons.push("Contains suspicious patterns");
+  const highRisk = ['auth-', 'login-', 'ledger', 'paypal-', 'verify-', 'secure-'];
+  const platforms = ['pages.dev', 'netlify.app', 'github.io', 'herokuapp.com'];
+  
+  const foundRisk = highRisk.filter(pattern => urlLower.includes(pattern));
+  const foundPlatform = platforms.filter(platform => urlLower.includes(platform));
+
+  if (foundRisk.length > 0 || foundPlatform.length > 0) {
     status = "block";
-    trust_score = 15;
+    trust_score = 10;
+    reasons.push(`Suspicious patterns detected: ${[...foundRisk, ...foundPlatform].join(', ')}`);
+    reasons.push("Likely phishing attempt - exercise extreme caution");
   }
 
   if (status === "safe") {
-    reasons.push("Basic analysis shows no obvious threats");
+    reasons.push("No obvious threat indicators detected");
   }
 
   return { status, reasons, trust_score };
 }
 
 export default router;
-'@
+'@ | Out-File -FilePath "api/src/routes/scanLink.js" -Encoding utf8
 
-$aiPoweredScanLink | Out-File -FilePath "api/src/routes/scanLink.js" -Encoding utf8
-
-# Update scanMessage.js to also use AI
-$aiPoweredScanMessage = @'
-import express from "express";
-import { askElaraScamExplain } from "../llm/azureClient.js";
-
-const router = express.Router();
-
-router.post("/", async (req, res) => {
-  try {
-    const { content } = req.body || {};
-    if (!content) {
-      return res.status(400).json({ 
-        status: "error", 
-        reasons: ["Missing message content"] 
-      });
-    }
-
-    const analysis = await analyzeMessageWithAI(content);
-    res.json(analysis);
-  } catch (err) {
-    console.error("scan-message error:", err);
-    const fallback = basicMessageAnalysis(content);
-    fallback.reasons.unshift("AI analysis unavailable - using basic detection");
-    res.json(fallback);
-  }
-});
-
-async function analyzeMessageWithAI(content) {
-  const prompt = `Analyze this message for scam/phishing content: "${content}"
-
-Look for:
-- Urgency tactics and pressure language
-- Requests for sensitive information
-- Impersonation of legitimate organizations
-- Social engineering techniques
-- Financial fraud indicators
-- Emotional manipulation tactics
-
-Assess:
-1. Risk level (SAFE, WARN, or BLOCK)
-2. Trust score (0-100)
-3. Specific manipulation techniques identified
-4. Clear explanation of threats
-
-Be particularly alert for:
-- Cryptocurrency/wallet scams
-- Banking/payment fraud
-- Tech support scams
-- Romance/advance fee fraud
-- Identity theft attempts`;
-
-  try {
-    const aiResponse = await askElaraScamExplain(prompt, { message: content, analysis_type: "message_security" });
-    return parseMessageAI(aiResponse.answer, content);
-  } catch (error) {
-    console.error("AI message analysis failed:", error);
-    throw error;
-  }
-}
-
-function parseMessageAI(aiText, content) {
-  const text = aiText.toLowerCase();
-  let status = "safe";
-  let trust_score = 75;
-  const reasons = [];
-
-  if (text.includes("block") || text.includes("scam") || text.includes("fraud")) {
-    status = "block";
-    trust_score = 5;
-  } else if (text.includes("warn") || text.includes("suspicious") || text.includes("caution")) {
-    status = "warn";
-    trust_score = 30;
-  }
-
-  const scamTypes = [
-    "phishing", "social engineering", "urgency tactics", "financial fraud",
-    "identity theft", "cryptocurrency scam", "romance scam", "tech support scam"
-  ];
-
-  scamTypes.forEach(scamType => {
-    if (text.includes(scamType)) {
-      reasons.push(`AI detected: ${scamType} techniques`);
-    }
-  });
-
-  if (status === "block") {
-    reasons.push("AI Analysis: SCAM DETECTED - Do not respond or provide information");
-  } else if (status === "warn") {
-    reasons.push("AI Analysis: SUSPICIOUS - Exercise caution");
-  } else {
-    reasons.push("AI Analysis: Message appears legitimate");
-  }
-
-  const cleanExplanation = aiText.replace(/[{}[\]"]/g, '').trim();
-  if (cleanExplanation.length > 50) {
-    reasons.push(`AI Analysis: ${cleanExplanation.substring(0, 200)}...`);
-  }
-
-  return { status, reasons, trust_score };
-}
-
-function basicMessageAnalysis(content) {
-  const reasons = [];
-  let status = "safe";
-  let trust_score = 60;
-
-  const urgencyWords = ['urgent', 'immediate', 'expire', 'suspend'];
-  if (urgencyWords.some(word => content.toLowerCase().includes(word))) {
-    reasons.push("Contains urgency indicators");
-    status = "warn";
-    trust_score = 25;
-  }
-
-  return { status, reasons, trust_score };
-}
-
-export default router;
-'@
-
-$aiPoweredScanMessage | Out-File -FilePath "api/src/routes/scanMessage.js" -Encoding utf8
-
-Write-Host "Updated to use GPT-4.1-mini and GPT-5-mini for threat analysis" -ForegroundColor Green
-
-# Deploy the AI-powered version
+# Deploy API updates
 git add .
-git commit -m "Implement AI-powered threat detection using GPT-4.1-mini and GPT-5-mini"
+git commit -m "Complete AI-powered threat detection with GPT-4.1-mini integration"
 git push origin develop
 
-Write-Host "Deploying AI-powered threat detection..." -ForegroundColor Yellow
-Write-Host "This will now use your Azure OpenAI models for much better accuracy" -ForegroundColor Cyan
+# Deploy to production
+git checkout main
+git merge develop --no-edit
+git push origin main
+
+Write-Host "AI-powered API deploying..." -ForegroundColor Green

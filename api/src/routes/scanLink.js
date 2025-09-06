@@ -17,40 +17,36 @@ router.post("/", async (req, res) => {
     res.json(analysis);
   } catch (err) {
     console.error("scan-link error:", err);
-    // Fallback to basic analysis if AI fails
     const fallback = basicUrlAnalysis(url);
-    fallback.reasons.unshift("AI analysis unavailable - using basic detection");
+    fallback.reasons.unshift("AI temporarily unavailable - using enhanced pattern detection");
     res.json(fallback);
   }
 });
 
 async function analyzeUrlWithAI(url) {
-  const prompt = `Analyze this URL for security threats: ${url}
+  const prompt = `Analyze this URL for cybersecurity threats: ${url}
 
-Consider:
-- Brand impersonation attempts
-- Suspicious domain patterns
-- Common phishing indicators
-- URL structure anomalies
-- Domain reputation signals
+Assess for:
+1. Phishing attempts (brand impersonation, lookalike domains)
+2. Malicious hosting platforms
+3. Suspicious URL structure
+4. Domain reputation indicators
 
 Provide:
-1. Risk level (SAFE, WARN, or BLOCK)
-2. Trust score (0-100)
-3. Specific reasons for the assessment
-4. Clear explanation of any threats detected
+- RISK LEVEL: SAFE, WARN, or BLOCK
+- TRUST SCORE: 0-100 (where 100 is completely safe)
+- SPECIFIC REASONS: List concrete threats found
 
-Be especially vigilant for:
-- Cryptocurrency/wallet phishing (ledger, metamask, coinbase)
-- Banking/payment impersonation (paypal, bank names)
-- Tech company impersonation (microsoft, google, apple)
-- Authentication/login page mimics
-- Suspicious hosting platforms (pages.dev, netlify.app, github.io)
+Pay special attention to:
+- Cryptocurrency phishing (ledger, metamask, coinbase)
+- Authentication pages (auth-, login-, verify-)
+- Free hosting abuse (pages.dev, netlify.app, github.io)
+- Brand impersonation attempts
 
-Format response as JSON-like structure but in plain text.`;
+Be concise but thorough.`;
 
   try {
-    const aiResponse = await askElaraScamExplain(prompt, { url, analysis_type: "url_security" });
+    const aiResponse = await askElaraScamExplain(prompt);
     return parseAIResponse(aiResponse.answer, url);
   } catch (error) {
     console.error("AI analysis failed:", error);
@@ -64,72 +60,66 @@ function parseAIResponse(aiText, url) {
   let trust_score = 70;
   const reasons = [];
 
-  // Extract AI assessment
-  if (text.includes("block") || text.includes("high risk") || text.includes("dangerous")) {
+  if (text.includes("block") || text.includes("high risk") || text.includes("phishing")) {
     status = "block";
-    trust_score = 10;
+    trust_score = Math.min(15, extractScore(text) || 15);
   } else if (text.includes("warn") || text.includes("suspicious") || text.includes("caution")) {
-    status = "warn";
-    trust_score = 35;
-  } else if (text.includes("safe") || text.includes("legitimate")) {
+    status = "warn"; 
+    trust_score = Math.min(40, extractScore(text) || 40);
+  } else if (text.includes("safe")) {
     status = "safe";
-    trust_score = 85;
+    trust_score = Math.max(80, extractScore(text) || 80);
   }
 
-  // Extract specific threats mentioned by AI
-  const threats = [
-    "phishing", "impersonation", "suspicious domain", "brand mimicking",
-    "credential theft", "cryptocurrency scam", "payment fraud", "malicious"
-  ];
-
-  threats.forEach(threat => {
-    if (text.includes(threat)) {
-      reasons.push(`AI detected: ${threat} indicators`);
+  const lines = aiText.split('\n').filter(line => line.trim());
+  lines.forEach(line => {
+    if (line.includes('reason') || line.includes('-') || line.includes('threat')) {
+      const cleanLine = line.replace(/^\W+/, '').trim();
+      if (cleanLine.length > 10) {
+        reasons.push(cleanLine);
+      }
     }
   });
 
-  // Add AI-powered reasoning
-  if (status === "block") {
-    reasons.push("AI Analysis: HIGH THREAT - Multiple malicious indicators detected");
-    reasons.push("Recommendation: Do not visit or enter any information");
-  } else if (status === "warn") {
-    reasons.push("AI Analysis: SUSPICIOUS - Proceed with extreme caution");
-    reasons.push("Recommendation: Verify legitimacy before proceeding");
-  } else {
-    reasons.push("AI Analysis: No significant threats detected");
-    reasons.push("URL appears to follow legitimate patterns");
-  }
-
-  // Add the full AI explanation as the last reason
-  const cleanExplanation = aiText.replace(/[{}[\]"]/g, '').trim();
-  if (cleanExplanation.length > 50) {
-    reasons.push(`AI Explanation: ${cleanExplanation.substring(0, 200)}...`);
+  if (reasons.length === 0) {
+    reasons.push(aiText.length > 200 ? aiText.substring(0, 200) + "..." : aiText);
   }
 
   return { status, reasons, trust_score };
 }
 
+function extractScore(text) {
+  const scoreMatch = text.match(/(\d+)\/100|score[:\s]*(\d+)|trust[:\s]*(\d+)/i);
+  return scoreMatch ? parseInt(scoreMatch[1] || scoreMatch[2] || scoreMatch[3]) : null;
+}
+
 function basicUrlAnalysis(url) {
-  // Fallback basic analysis
   const reasons = [];
   let status = "safe";
   let trust_score = 60;
+  const urlLower = url.toLowerCase();
 
   if (!url.startsWith('https://')) {
-    reasons.push("Not using secure HTTPS connection");
+    reasons.push("Insecure HTTP connection");
     status = "warn";
     trust_score = 30;
   }
 
-  const suspicious = ['auth-', 'login-', 'ledger', 'paypal-', 'pages.dev'];
-  if (suspicious.some(pattern => url.toLowerCase().includes(pattern))) {
-    reasons.push("Contains suspicious patterns");
+  const highRisk = ['auth-', 'login-', 'ledger', 'paypal-', 'verify-', 'secure-'];
+  const platforms = ['pages.dev', 'netlify.app', 'github.io', 'herokuapp.com'];
+  
+  const foundRisk = highRisk.filter(pattern => urlLower.includes(pattern));
+  const foundPlatform = platforms.filter(platform => urlLower.includes(platform));
+
+  if (foundRisk.length > 0 || foundPlatform.length > 0) {
     status = "block";
-    trust_score = 15;
+    trust_score = 10;
+    reasons.push(`Suspicious patterns detected: ${[...foundRisk, ...foundPlatform].join(', ')}`);
+    reasons.push("Likely phishing attempt - exercise extreme caution");
   }
 
   if (status === "safe") {
-    reasons.push("Basic analysis shows no obvious threats");
+    reasons.push("No obvious threat indicators detected");
   }
 
   return { status, reasons, trust_score };
