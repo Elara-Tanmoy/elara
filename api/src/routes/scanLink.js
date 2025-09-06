@@ -26,24 +26,20 @@ router.post("/", async (req, res) => {
 async function analyzeUrlWithAI(url) {
   const prompt = `Analyze this URL for cybersecurity threats: ${url}
 
-Assess for:
-1. Phishing attempts (brand impersonation, lookalike domains)
-2. Malicious hosting platforms
-3. Suspicious URL structure
-4. Domain reputation indicators
+Provide a clear security assessment:
 
-Provide:
-- RISK LEVEL: SAFE, WARN, or BLOCK
-- TRUST SCORE: 0-100 (where 100 is completely safe)
-- SPECIFIC REASONS: List concrete threats found
+1. RISK LEVEL: State clearly if this URL is SAFE, WARN, or BLOCK
+2. TRUST SCORE: Give a number from 0-100 (0=dangerous, 100=completely safe)
+3. REASONING: List specific findings that support your assessment
 
-Pay special attention to:
-- Cryptocurrency phishing (ledger, metamask, coinbase)
-- Authentication pages (auth-, login-, verify-)
-- Free hosting abuse (pages.dev, netlify.app, github.io)
+Focus on:
+- Domain legitimacy and reputation
+- Suspicious URL patterns (auth-, login-, verify-)
 - Brand impersonation attempts
+- Hosting platform abuse (pages.dev, netlify.app)
+- Cryptocurrency/financial phishing indicators
 
-Be concise but thorough.`;
+Be consistent: if you list positive safety indicators, the risk should be SAFE with high trust score.`;
 
   try {
     const aiResponse = await askElaraScamExplain(prompt);
@@ -60,37 +56,76 @@ function parseAIResponse(aiText, url) {
   let trust_score = 70;
   const reasons = [];
 
-  if (text.includes("block") || text.includes("high risk") || text.includes("phishing")) {
+  // More careful parsing - look for explicit risk statements
+  if (text.includes("risk level: block") || text.includes("status: block") || 
+      (text.includes("phishing") && text.includes("detected")) ||
+      (text.includes("malicious") && !text.includes("no malicious"))) {
     status = "block";
-    trust_score = Math.min(15, extractScore(text) || 15);
-  } else if (text.includes("warn") || text.includes("suspicious") || text.includes("caution")) {
-    status = "warn"; 
-    trust_score = Math.min(40, extractScore(text) || 40);
-  } else if (text.includes("safe")) {
+    trust_score = 10;
+  } else if (text.includes("risk level: warn") || text.includes("status: warn") || 
+             text.includes("suspicious") && !text.includes("no suspicious")) {
+    status = "warn";
+    trust_score = 35;
+  } else if (text.includes("risk level: safe") || text.includes("status: safe") ||
+             text.includes("legitimate") || text.includes("appears safe")) {
     status = "safe";
-    trust_score = Math.max(80, extractScore(text) || 80);
+    trust_score = 85;
   }
 
-  const lines = aiText.split('\n').filter(line => line.trim());
+  // Extract trust score from AI response
+  const scoreMatch = text.match(/trust score[:\s]*(\d+)|score[:\s]*(\d+)\/100|(\d+)\/100/i);
+  if (scoreMatch) {
+    const extractedScore = parseInt(scoreMatch[1] || scoreMatch[2] || scoreMatch[3]);
+    if (extractedScore >= 0 && extractedScore <= 100) {
+      trust_score = extractedScore;
+      
+      // Align status with trust score
+      if (trust_score >= 70) status = "safe";
+      else if (trust_score >= 30) status = "warn";
+      else status = "block";
+    }
+  }
+
+  // Extract reasons more carefully
+  const lines = aiText.split(/\n|;|\./);
   lines.forEach(line => {
-    if (line.includes('reason') || line.includes('-') || line.includes('threat')) {
-      const cleanLine = line.replace(/^\W+/, '').trim();
-      if (cleanLine.length > 10) {
-        reasons.push(cleanLine);
-      }
+    const cleanLine = line.trim().replace(/^[-â€¢*]\s*/, '');
+    if (cleanLine.length > 20 && 
+        (cleanLine.includes('domain') || cleanLine.includes('url') || 
+         cleanLine.includes('no') || cleanLine.includes('legitimate') ||
+         cleanLine.includes('suspicious') || cleanLine.includes('safe'))) {
+      reasons.push(cleanLine);
     }
   });
 
+  // If no specific reasons extracted, use summary
   if (reasons.length === 0) {
-    reasons.push(aiText.length > 200 ? aiText.substring(0, 200) + "..." : aiText);
+    const summary = aiText.length > 150 ? aiText.substring(0, 150) + "..." : aiText;
+    reasons.push(summary);
+  }
+
+  // Final consistency check
+  const positiveIndicators = reasons.filter(r => 
+    r.toLowerCase().includes('no suspicious') || 
+    r.toLowerCase().includes('legitimate') ||
+    r.toLowerCase().includes('no malicious') ||
+    r.toLowerCase().includes('good reputation')
+  ).length;
+
+  const negativeIndicators = reasons.filter(r =>
+    r.toLowerCase().includes('suspicious') ||
+    r.toLowerCase().includes('phishing') ||
+    r.toLowerCase().includes('malicious')
+  ).length;
+
+  // If mostly positive indicators but marked as block, correct it
+  if (positiveIndicators > negativeIndicators && status === "block") {
+    status = "safe";
+    trust_score = Math.max(trust_score, 75);
+    reasons.push("Assessment: URL appears legitimate based on analysis");
   }
 
   return { status, reasons, trust_score };
-}
-
-function extractScore(text) {
-  const scoreMatch = text.match(/(\d+)\/100|score[:\s]*(\d+)|trust[:\s]*(\d+)/i);
-  return scoreMatch ? parseInt(scoreMatch[1] || scoreMatch[2] || scoreMatch[3]) : null;
 }
 
 function basicUrlAnalysis(url) {
@@ -100,26 +135,24 @@ function basicUrlAnalysis(url) {
   const urlLower = url.toLowerCase();
 
   if (!url.startsWith('https://')) {
-    reasons.push("Insecure HTTP connection");
+    reasons.push("Uses insecure HTTP connection");
     status = "warn";
     trust_score = 30;
   }
 
   const highRisk = ['auth-', 'login-', 'ledger', 'paypal-', 'verify-', 'secure-'];
-  const platforms = ['pages.dev', 'netlify.app', 'github.io', 'herokuapp.com'];
+  const platforms = ['pages.dev', 'netlify.app', 'github.io'];
   
   const foundRisk = highRisk.filter(pattern => urlLower.includes(pattern));
   const foundPlatform = platforms.filter(platform => urlLower.includes(platform));
 
   if (foundRisk.length > 0 || foundPlatform.length > 0) {
     status = "block";
-    trust_score = 10;
-    reasons.push(`Suspicious patterns detected: ${[...foundRisk, ...foundPlatform].join(', ')}`);
-    reasons.push("Likely phishing attempt - exercise extreme caution");
-  }
-
-  if (status === "safe") {
-    reasons.push("No obvious threat indicators detected");
+    trust_score = 15;
+    reasons.push(`High-risk patterns detected: ${[...foundRisk, ...foundPlatform].join(', ')}`);
+  } else {
+    reasons.push("No obvious threat indicators in URL structure");
+    trust_score = 80;
   }
 
   return { status, reasons, trust_score };
