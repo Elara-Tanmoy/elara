@@ -1,4 +1,5 @@
 ﻿import express from "express";
+import { askElaraScamExplain } from "../llm/azureClient.js";
 
 const router = express.Router();
 
@@ -12,46 +13,123 @@ router.post("/", async (req, res) => {
       });
     }
 
-    const analysis = analyzeUrl(url);
+    const analysis = await analyzeUrlWithAI(url);
     res.json(analysis);
   } catch (err) {
     console.error("scan-link error:", err);
-    res.status(500).json({ 
-      status: "error", 
-      reasons: ["Analysis service unavailable"] 
-    });
+    // Fallback to basic analysis if AI fails
+    const fallback = basicUrlAnalysis(url);
+    fallback.reasons.unshift("AI analysis unavailable - using basic detection");
+    res.json(fallback);
   }
 });
 
-function analyzeUrl(url) {
+async function analyzeUrlWithAI(url) {
+  const prompt = `Analyze this URL for security threats: ${url}
+
+Consider:
+- Brand impersonation attempts
+- Suspicious domain patterns
+- Common phishing indicators
+- URL structure anomalies
+- Domain reputation signals
+
+Provide:
+1. Risk level (SAFE, WARN, or BLOCK)
+2. Trust score (0-100)
+3. Specific reasons for the assessment
+4. Clear explanation of any threats detected
+
+Be especially vigilant for:
+- Cryptocurrency/wallet phishing (ledger, metamask, coinbase)
+- Banking/payment impersonation (paypal, bank names)
+- Tech company impersonation (microsoft, google, apple)
+- Authentication/login page mimics
+- Suspicious hosting platforms (pages.dev, netlify.app, github.io)
+
+Format response as JSON-like structure but in plain text.`;
+
+  try {
+    const aiResponse = await askElaraScamExplain(prompt, { url, analysis_type: "url_security" });
+    return parseAIResponse(aiResponse.answer, url);
+  } catch (error) {
+    console.error("AI analysis failed:", error);
+    throw error;
+  }
+}
+
+function parseAIResponse(aiText, url) {
+  const text = aiText.toLowerCase();
+  let status = "safe";
+  let trust_score = 70;
+  const reasons = [];
+
+  // Extract AI assessment
+  if (text.includes("block") || text.includes("high risk") || text.includes("dangerous")) {
+    status = "block";
+    trust_score = 10;
+  } else if (text.includes("warn") || text.includes("suspicious") || text.includes("caution")) {
+    status = "warn";
+    trust_score = 35;
+  } else if (text.includes("safe") || text.includes("legitimate")) {
+    status = "safe";
+    trust_score = 85;
+  }
+
+  // Extract specific threats mentioned by AI
+  const threats = [
+    "phishing", "impersonation", "suspicious domain", "brand mimicking",
+    "credential theft", "cryptocurrency scam", "payment fraud", "malicious"
+  ];
+
+  threats.forEach(threat => {
+    if (text.includes(threat)) {
+      reasons.push(`AI detected: ${threat} indicators`);
+    }
+  });
+
+  // Add AI-powered reasoning
+  if (status === "block") {
+    reasons.push("AI Analysis: HIGH THREAT - Multiple malicious indicators detected");
+    reasons.push("Recommendation: Do not visit or enter any information");
+  } else if (status === "warn") {
+    reasons.push("AI Analysis: SUSPICIOUS - Proceed with extreme caution");
+    reasons.push("Recommendation: Verify legitimacy before proceeding");
+  } else {
+    reasons.push("AI Analysis: No significant threats detected");
+    reasons.push("URL appears to follow legitimate patterns");
+  }
+
+  // Add the full AI explanation as the last reason
+  const cleanExplanation = aiText.replace(/[{}[\]"]/g, '').trim();
+  if (cleanExplanation.length > 50) {
+    reasons.push(`AI Explanation: ${cleanExplanation.substring(0, 200)}...`);
+  }
+
+  return { status, reasons, trust_score };
+}
+
+function basicUrlAnalysis(url) {
+  // Fallback basic analysis
   const reasons = [];
   let status = "safe";
-  let trust_score = 85;
+  let trust_score = 60;
 
   if (!url.startsWith('https://')) {
     reasons.push("Not using secure HTTPS connection");
     status = "warn";
-    trust_score -= 20;
+    trust_score = 30;
   }
 
-  const suspicious = ['bit.ly', 'tinyurl', 'paypal-', 'paypaI', 'arnazon', 'microsof', 'suspicious'];
-  const hasSuspicious = suspicious.some(pattern => url.toLowerCase().includes(pattern));
-  
-  if (hasSuspicious) {
-    reasons.push("Contains suspicious domain patterns");
+  const suspicious = ['auth-', 'login-', 'ledger', 'paypal-', 'pages.dev'];
+  if (suspicious.some(pattern => url.toLowerCase().includes(pattern))) {
+    reasons.push("Contains suspicious patterns");
     status = "block";
     trust_score = 15;
   }
 
-  if (url.includes('temp') || url.includes('new')) {
-    reasons.push("Potentially new or temporary domain");
-    status = status === "safe" ? "warn" : status;
-    trust_score -= 10;
-  }
-
   if (status === "safe") {
-    reasons.push("URL appears legitimate");
-    reasons.push("HTTPS connection verified");
+    reasons.push("Basic analysis shows no obvious threats");
   }
 
   return { status, reasons, trust_score };
