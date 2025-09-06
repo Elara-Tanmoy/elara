@@ -1,5 +1,5 @@
-# Replace the broken workflow with a working one
-$fixedWorkflow = @'
+# Final working deployment workflow
+$workingWorkflow = @'
 name: Deploy Elara API
 
 on:
@@ -25,26 +25,29 @@ jobs:
           cd api
           npm ci --production
       
+      - name: Create clean deployment package
+        run: |
+          cd api
+          zip -r ../deployment.zip . -x "*.log" "*.tmp" ".git/*"
+      
       - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy to staging
+      - name: Deploy to staging using ZIP
         run: |
-          cd api
-          tar -czf ../deploy.tar.gz .
           az webapp deploy \
             --resource-group rg-elara-dev \
             --name elara-api-dev \
             --slot staging \
-            --src-path ../deploy.tar.gz \
-            --type tar \
+            --src-path deployment.zip \
+            --type zip \
             --restart true \
             --clean true
       
       - name: Test staging
         run: |
-          sleep 30
+          sleep 45
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
 
   deploy-production:
@@ -64,26 +67,29 @@ jobs:
           cd api
           npm ci --production
       
+      - name: Create deployment package
+        run: |
+          cd api
+          zip -r ../deployment.zip . -x "*.log" "*.tmp" ".git/*"
+      
       - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
       - name: Deploy to staging first
         run: |
-          cd api
-          tar -czf ../deploy.tar.gz .
           az webapp deploy \
             --resource-group rg-elara-dev \
             --name elara-api-dev \
             --slot staging \
-            --src-path ../deploy.tar.gz \
-            --type tar \
+            --src-path deployment.zip \
+            --type zip \
             --restart true \
             --clean true
       
       - name: Test staging
         run: |
-          sleep 30
+          sleep 45
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
       
       - name: Swap to production
@@ -95,34 +101,44 @@ jobs:
       
       - name: Test production
         run: |
-          sleep 15
+          sleep 20
           curl -f https://elara-api-dev.azurewebsites.net/health
 '@
 
-# Replace the workflow
-$fixedWorkflow | Out-File -FilePath ".github\workflows\deploy.yml" -Encoding utf8
+# Update the workflow
+$workingWorkflow | Out-File -FilePath ".github\workflows\deploy.yml" -Encoding utf8
 
-# Test the fix
-$testContent = Get-Content api/server.js -Raw
-$testContent = $testContent -replace '"azure_openai.*"', '"azure_openai_fixed_workflow"'
-$testContent | Out-File -FilePath api/server.js -Encoding utf8
+# Make a test change
+$serverContent = Get-Content api/server.js -Raw
+$serverContent = $serverContent -replace '"azure_openai.*"', '"azure_openai_cli_zip_deploy"'
+$serverContent | Out-File -FilePath api/server.js -Encoding utf8
 
 git add .
-git commit -m "Fix: Replace broken webapps-deploy with working Azure CLI deployment"
+git commit -m "Fix: Use correct Azure CLI zip deployment method"
 git push origin develop
 
-Write-Host "Fixed workflow deployed. Monitor at:" -ForegroundColor Green
-Write-Host "https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
+Write-Host "Corrected workflow deployed - using ZIP with Azure CLI" -ForegroundColor Green
+Write-Host "Monitor: https://github.com/Elara-Tanmoy/elara/actions" -ForegroundColor Cyan
 
-# Wait and verify
-Start-Sleep 120
-try {
-    $result = Invoke-RestMethod -Uri "https://elara-api-dev-staging.azurewebsites.net/health" -Method GET -TimeoutSec 15
-    if ($result.provider -eq "azure_openai_fixed_workflow") {
-        Write-Host "SUCCESS! Deployment working with fixed workflow" -ForegroundColor Green
-    } else {
-        Write-Host "Still deploying or failed. Current: $($result.provider)" -ForegroundColor Yellow
+# Monitor the deployment
+$timeout = 180
+$elapsed = 0
+
+while ($elapsed -lt $timeout) {
+    Start-Sleep 30
+    $elapsed += 30
+    
+    try {
+        $health = Invoke-RestMethod -Uri "https://elara-api-dev-staging.azurewebsites.net/health" -Method GET -TimeoutSec 15
+        
+        if ($health.provider -eq "azure_openai_cli_zip_deploy") {
+            Write-Host "SUCCESS! Azure CLI ZIP deployment working!" -ForegroundColor Green
+            Write-Host "Health response: $($health | ConvertTo-Json)" -ForegroundColor White
+            break
+        } else {
+            Write-Host "Deployment in progress... (${elapsed}s) Current: $($health.provider)" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "Waiting for deployment completion... (${elapsed}s)" -ForegroundColor Yellow
     }
-} catch {
-    Write-Host "Deployment verification failed: $($_.Exception.Message)" -ForegroundColor Red
 }

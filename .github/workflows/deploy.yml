@@ -23,26 +23,29 @@ jobs:
           cd api
           npm ci --production
       
+      - name: Create clean deployment package
+        run: |
+          cd api
+          zip -r ../deployment.zip . -x "*.log" "*.tmp" ".git/*"
+      
       - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy to staging
+      - name: Deploy to staging using ZIP
         run: |
-          cd api
-          tar -czf ../deploy.tar.gz .
           az webapp deploy \
             --resource-group rg-elara-dev \
             --name elara-api-dev \
             --slot staging \
-            --src-path ../deploy.tar.gz \
-            --type tar \
+            --src-path deployment.zip \
+            --type zip \
             --restart true \
             --clean true
       
       - name: Test staging
         run: |
-          sleep 30
+          sleep 45
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
 
   deploy-production:
@@ -62,26 +65,29 @@ jobs:
           cd api
           npm ci --production
       
+      - name: Create deployment package
+        run: |
+          cd api
+          zip -r ../deployment.zip . -x "*.log" "*.tmp" ".git/*"
+      
       - uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
       - name: Deploy to staging first
         run: |
-          cd api
-          tar -czf ../deploy.tar.gz .
           az webapp deploy \
             --resource-group rg-elara-dev \
             --name elara-api-dev \
             --slot staging \
-            --src-path ../deploy.tar.gz \
-            --type tar \
+            --src-path deployment.zip \
+            --type zip \
             --restart true \
             --clean true
       
       - name: Test staging
         run: |
-          sleep 30
+          sleep 45
           curl -f https://elara-api-dev-staging.azurewebsites.net/health
       
       - name: Swap to production
@@ -93,5 +99,5 @@ jobs:
       
       - name: Test production
         run: |
-          sleep 15
+          sleep 20
           curl -f https://elara-api-dev.azurewebsites.net/health
