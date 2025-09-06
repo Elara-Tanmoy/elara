@@ -1,4 +1,4 @@
-﻿.dashboard {
+.dashboard {
     max-width: 900px;
     margin: 2rem auto;
     padding: 2rem;
@@ -22,4 +22,4 @@
   .status-warn { background-color: #fefce8; border-color: #f59e0b; }
   .status-block { background-color: #fef2f2; border-color: #ef4444; }
   .status-error { background-color: #f3f4f6; border-color: #6b7280; }
-  .reasons-list { list-style-type: 'â†’ '; padding-left: 1.5rem; margin: 0; }
+  .reasons-list { list-style-type: '→ '; padding-left: 1.5rem; margin: 0; }

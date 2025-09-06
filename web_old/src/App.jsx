@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import './App.css';
 
 function App() {
@@ -6,7 +6,7 @@ function App() {
   const [result, setResult] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  // Production API Endpoint
+  // Final Production API Endpoint - No Placeholder
   const API_ENDPOINT = 'https://elara-api-dev.azurewebsites.net'; 
 
   const handleScan = async () => {
