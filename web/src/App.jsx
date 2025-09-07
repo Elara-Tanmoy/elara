@@ -27,7 +27,7 @@ function App() {
         const formData = new FormData();
         files.forEach(file => formData.append('files', file));
         
-        response = await fetch(${API_BASE}/scan-attachments, {
+        response = await fetch(`${API_BASE}/scan-attachments`, {
           method: 'POST',
           body: formData,
         });
