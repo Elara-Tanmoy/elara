@@ -28,17 +28,22 @@ jobs:
       - name: Install dependencies
         run: |
           cd api
-          npm ci --production
+          npm ci --omit=dev
       
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
+      - name: Restart staging slot
+        run: |
+          az webapp restart --resource-group ${{ env.RESOURCE_GROUP }} --name ${{ env.AZURE_WEBAPP_NAME }} --slot staging
+          sleep 30
+      
       - name: Deploy to staging
         run: |
           cd api
-          zip -r ../staging-deploy.zip . -x "node_modules/.cache/*" "*.log"
+          zip -r ../staging-deploy.zip . -x "node_modules/.cache/*" "*.log" "*.zip"
           az webapp deploy \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
@@ -48,10 +53,21 @@ jobs:
             --restart true \
             --clean true
       
-      - name: Test staging
+      - name: Wait for staging startup
+        run: sleep 60
+      
+      - name: Test staging with retries
         run: |
-          sleep 45
-          curl -f https://elara-api-dev-staging.azurewebsites.net/health
+          for i in {1..5}; do
+            if curl -f https://elara-api-dev-staging.azurewebsites.net/health; then
+              echo "Staging deployment successful!"
+              exit 0
+            fi
+            echo "Attempt $i failed, waiting..."
+            sleep 30
+          done
+          echo "Staging deployment failed after 5 attempts"
+          exit 1
 
   deploy-production:
     if: github.ref == 'refs/heads/main'
@@ -70,17 +86,17 @@ jobs:
       - name: Install dependencies
         run: |
           cd api
-          npm ci --production
+          npm ci --omit=dev
       
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
       
-      - name: Deploy to staging first
+      - name: Deploy and swap to production
         run: |
           cd api
-          zip -r ../prod-deploy.zip . -x "node_modules/.cache/*" "*.log"
+          zip -r ../prod-deploy.zip . -x "node_modules/.cache/*" "*.log" "*.zip"
           az webapp deploy \
             --resource-group ${{ env.RESOURCE_GROUP }} \
             --name ${{ env.AZURE_WEBAPP_NAME }} \
@@ -89,20 +105,20 @@ jobs:
             --type zip \
             --restart true \
             --clean true
-      
-      - name: Test staging before swap
-        run: |
-          sleep 45
-          curl -f https://elara-api-dev-staging.azurewebsites.net/health
-      
-      - name: Swap to production
-        run: |
-          az webapp deployment slot swap \
-            --resource-group ${{ env.RESOURCE_GROUP }} \
-            --name ${{ env.AZURE_WEBAPP_NAME }} \
-            --slot staging
-      
-      - name: Verify production
-        run: |
-          sleep 15
-          curl -f https://elara-api-dev.azurewebsites.net/health
+          
+          sleep 60
+          
+          # Test staging before swap
+          if curl -f https://elara-api-dev-staging.azurewebsites.net/health; then
+            # Swap to production
+            az webapp deployment slot swap \
+              --resource-group ${{ env.RESOURCE_GROUP }} \
+              --name ${{ env.AZURE_WEBAPP_NAME }} \
+              --slot staging
+            
+            sleep 30
+            curl -f https://elara-api-dev.azurewebsites.net/health
+          else
+            echo "Staging test failed, aborting production swap"
+            exit 1
+          fi
